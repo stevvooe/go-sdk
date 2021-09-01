@@ -1,4 +1,4 @@
-package evaluation
+package statsig
 
 import (
 	"crypto/sha256"
@@ -11,30 +11,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/statsig-io/go-sdk/internal/net"
-	"github.com/statsig-io/go-sdk/types"
-
 	"github.com/statsig-io/ip3country-go/pkg/countrylookup"
 	"github.com/ua-parser/uap-go/uaparser"
 )
 
-type Evaluator struct {
-	store         *Store
+type evaluator struct {
+	store         *store
 	countryLookup *countrylookup.CountryLookup
 	uaParser      *uaparser.Parser
 }
 
-type EvalResult struct {
+type evalResult struct {
 	Pass            bool
-	ConfigValue     types.DynamicConfig
+	ConfigValue     DynamicConfig
 	FetchFromServer bool
 	Id              string
 }
 
 const dynamicConfigType = "dynamic_config"
 
-func New(net *net.Net) *Evaluator {
-	store := initStore(net)
+func newEvaluator(transport *transport) *evaluator {
+	store := newStore(transport)
 	parser := uaparser.NewFromSaved()
 	countryLookup := countrylookup.New()
 	defer func() {
@@ -44,32 +41,32 @@ func New(net *net.Net) *Evaluator {
 		}
 	}()
 
-	return &Evaluator{
+	return &evaluator{
 		store:         store,
 		countryLookup: countryLookup,
 		uaParser:      parser,
 	}
 }
 
-func (e *Evaluator) Stop() {
+func (e *evaluator) Stop() {
 	e.store.StopPolling()
 }
 
-func (e *Evaluator) CheckGate(user types.StatsigUser, gateName string) *EvalResult {
+func (e *evaluator) CheckGate(user User, gateName string) *evalResult {
 	if gate, hasGate := e.store.FeatureGates[gateName]; hasGate {
 		return e.eval(user, gate)
 	}
-	return new(EvalResult)
+	return new(evalResult)
 }
 
-func (e *Evaluator) GetConfig(user types.StatsigUser, configName string) *EvalResult {
+func (e *evaluator) GetConfig(user User, configName string) *evalResult {
 	if config, hasConfig := e.store.DynamicConfigs[configName]; hasConfig {
 		return e.eval(user, config)
 	}
-	return new(EvalResult)
+	return new(evalResult)
 }
 
-func (e *Evaluator) eval(user types.StatsigUser, spec ConfigSpec) *EvalResult {
+func (e *evaluator) eval(user User, spec configSpec) *evalResult {
 	var configValue map[string]interface{}
 	isDynamicConfig := strings.ToLower(spec.Type) == dynamicConfigType
 	if isDynamicConfig {
@@ -94,27 +91,27 @@ func (e *Evaluator) eval(user types.StatsigUser, spec ConfigSpec) *EvalResult {
 							configValue = make(map[string]interface{})
 						}
 					}
-					return &EvalResult{
+					return &evalResult{
 						Pass:        pass,
-						ConfigValue: *types.NewConfig(spec.Name, configValue, rule.ID),
+						ConfigValue: *NewConfig(spec.Name, configValue, rule.ID),
 						Id:          rule.ID}
 				} else {
-					return &EvalResult{Pass: pass, Id: rule.ID}
+					return &evalResult{Pass: pass, Id: rule.ID}
 				}
 			}
 		}
 	}
 
 	if isDynamicConfig {
-		return &EvalResult{
+		return &evalResult{
 			Pass:        false,
-			ConfigValue: *types.NewConfig(spec.Name, configValue, "default"),
+			ConfigValue: *NewConfig(spec.Name, configValue, "default"),
 			Id:          "default"}
 	}
-	return &EvalResult{Pass: false, Id: "default"}
+	return &evalResult{Pass: false, Id: "default"}
 }
 
-func evalPassPercent(user types.StatsigUser, rule ConfigRule, spec ConfigSpec) bool {
+func evalPassPercent(user User, rule configRule, spec configSpec) bool {
 	ruleSalt := rule.Salt
 	if ruleSalt == "" {
 		ruleSalt = rule.ID
@@ -124,34 +121,34 @@ func evalPassPercent(user types.StatsigUser, rule ConfigRule, spec ConfigSpec) b
 	return hash%10000 < (uint64(rule.PassPercentage) * 100)
 }
 
-func (e *Evaluator) evalRule(user types.StatsigUser, rule ConfigRule) *EvalResult {
+func (e *evaluator) evalRule(user User, rule configRule) *evalResult {
 	for _, cond := range rule.Conditions {
 		res := e.evalCondition(user, cond)
 		if !res.Pass || res.FetchFromServer {
 			return res
 		}
 	}
-	return &EvalResult{Pass: true, FetchFromServer: false}
+	return &evalResult{Pass: true, FetchFromServer: false}
 }
 
-func (e *Evaluator) evalCondition(user types.StatsigUser, cond ConfigCondition) *EvalResult {
+func (e *evaluator) evalCondition(user User, cond configCondition) *evalResult {
 	var value interface{}
 	switch cond.Type {
 	case "public":
-		return &EvalResult{Pass: true}
+		return &evalResult{Pass: true}
 	case "fail_gate", "pass_gate":
 		dependentGateName, ok := cond.TargetValue.(string)
 		if !ok {
-			return &EvalResult{Pass: false}
+			return &evalResult{Pass: false}
 		}
 		result := e.CheckGate(user, dependentGateName)
 		if result.FetchFromServer {
-			return &EvalResult{FetchFromServer: true}
+			return &evalResult{FetchFromServer: true}
 		}
 		if cond.Type == "pass_gate" {
-			return &EvalResult{Pass: result.Pass}
+			return &evalResult{Pass: result.Pass}
 		} else {
-			return &EvalResult{Pass: !result.Pass}
+			return &evalResult{Pass: !result.Pass}
 		}
 	case "ip_based":
 		value = getFromUser(user, cond.Field)
@@ -174,7 +171,7 @@ func (e *Evaluator) evalCondition(user types.StatsigUser, cond ConfigCondition) 
 			value = int64(getHash(fmt.Sprintf("%s.%s", salt, user.UserID)) % 1000)
 		}
 	default:
-		return &EvalResult{FetchFromServer: true}
+		return &evalResult{FetchFromServer: true}
 	}
 
 	pass := false
@@ -255,10 +252,10 @@ func (e *Evaluator) evalCondition(user types.StatsigUser, cond ConfigCondition) 
 		pass = false
 		server = true
 	}
-	return &EvalResult{Pass: pass, FetchFromServer: server}
+	return &evalResult{Pass: pass, FetchFromServer: server}
 }
 
-func getFromUser(user types.StatsigUser, field string) interface{} {
+func getFromUser(user User, field string) interface{} {
 	var value interface{}
 	// 1. Try to get from top level user field first
 	switch strings.ToLower(field) {
@@ -294,7 +291,7 @@ func getFromUser(user types.StatsigUser, field string) interface{} {
 	return value
 }
 
-func getFromEnvironment(user types.StatsigUser, field string) string {
+func getFromEnvironment(user User, field string) string {
 	var value string
 	if val, ok := user.StatsigEnvironment[field]; ok {
 		value = val
@@ -305,7 +302,7 @@ func getFromEnvironment(user types.StatsigUser, field string) string {
 	return value
 }
 
-func getFromUserAgent(user types.StatsigUser, field string, parser *uaparser.Parser) string {
+func getFromUserAgent(user User, field string, parser *uaparser.Parser) string {
 	ua := getFromUser(user, "useragent")
 	uaStr, ok := ua.(string)
 	if !ok {
@@ -325,7 +322,7 @@ func getFromUserAgent(user types.StatsigUser, field string, parser *uaparser.Par
 	return ""
 }
 
-func getFromIP(user types.StatsigUser, field string, lookup *countrylookup.CountryLookup) string {
+func getFromIP(user User, field string, lookup *countrylookup.CountryLookup) string {
 	if strings.ToLower(field) != "country" {
 		return ""
 	}

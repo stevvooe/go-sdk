@@ -4,33 +4,31 @@ package statsig
 import (
 	"fmt"
 	"sync"
-
-	"github.com/statsig-io/go-sdk/types"
 )
 
-var instance *Client
-var once sync.Once
+const DefaultEndpoint = "https://api.statsig.com/v1"
+
+var (
+	instance *Client
+	once     sync.Once
+)
 
 // Initializes the global Statsig instance with the given sdkKey
 func Initialize(sdkKey string) {
-	once.Do(func() {
-		instance = New(sdkKey)
-	})
+	var o *Options
+	InitializeWithOptions(sdkKey, o.defaults())
+
 }
 
 // Initializes the global Statsig instance with the given sdkKey and options
-func InitializeWithOptions(sdkKey string, options *types.StatsigOptions) {
-	WrapperSDK(sdkKey, options, "", "")
-}
-
-func WrapperSDK(sdkKey string, options *types.StatsigOptions, sdkName string, sdkVersion string) {
+func InitializeWithOptions(sdkKey string, options *Options) {
 	once.Do(func() {
-		instance = WrapperSDKInstance(sdkKey, options, sdkName, sdkVersion)
+		instance = NewClientWithOptions(sdkKey, options)
 	})
 }
 
 // Checks the value of a Feature Gate for the given user
-func CheckGate(user types.StatsigUser, gate string) bool {
+func CheckGate(user User, gate string) bool {
 	if instance == nil {
 		panic(fmt.Errorf("must Initialize() statsig before calling CheckGate"))
 	}
@@ -38,7 +36,7 @@ func CheckGate(user types.StatsigUser, gate string) bool {
 }
 
 // Gets the DynamicConfig value for the given user
-func GetConfig(user types.StatsigUser, config string) types.DynamicConfig {
+func GetConfig(user User, config string) DynamicConfig {
 	if instance == nil {
 		panic(fmt.Errorf("must Initialize() statsig before calling GetConfig"))
 	}
@@ -46,7 +44,7 @@ func GetConfig(user types.StatsigUser, config string) types.DynamicConfig {
 }
 
 // Gets the DynamicConfig value of an Experiment for the given user
-func GetExperiment(user types.StatsigUser, experiment string) types.DynamicConfig {
+func GetExperiment(user User, experiment string) DynamicConfig {
 	if instance == nil {
 		panic(fmt.Errorf("must Initialize() statsig before calling GetExperiment"))
 	}
@@ -54,7 +52,7 @@ func GetExperiment(user types.StatsigUser, experiment string) types.DynamicConfi
 }
 
 // Logs an event to the Statsig console
-func LogEvent(event types.StatsigEvent) {
+func LogEvent(event Event) {
 	if instance == nil {
 		panic(fmt.Errorf("must Initialize() statsig before calling LogEvent"))
 	}
